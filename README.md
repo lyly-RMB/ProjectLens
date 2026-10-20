@@ -1,199 +1,222 @@
 # ProjectLens
 
-ProjectLens 是一个面向软件研发团队的证据驱动项目上下文与问答服务。
+ProjectLens 是一个面向研发团队的**项目上下文管理与知识闭环系统**。
 
-它把代码仓库、项目文档、任务、发布记录、运行信号、会话历史和项目记忆组织成一个受权限约束的 ProjectSpace，再由 Hermes Agent 使用只读工具调查并生成可追溯回答。
-
-ProjectLens 关注的不是“让模型知道更多”，而是让每次回答都能说明：
-
-- 当前回答针对哪个项目；
-- 当前操作者可以看到哪些来源；
-- 回答中的事实来自哪些证据；
-- 哪些内容是推断、未知或存在冲突；
-- 后续需要谁补充什么信息。
-
-这是一个 MIT 许可的开源项目原型，当前版本为 `0.1.0`。公开仓库包含核心代码、示例数据、测试和技术文档，不包含生产凭据、真实项目配置、运行数据库、Obsidian 状态或内部过程材料。
-
-## 为什么需要 ProjectLens
-
-研发项目的信息通常分散在不同系统中：
+它不只是把资料交给一个聊天模型，而是管理一条更严格的链路：
 
 ```text
-代码仓库 + 项目文档 + 任务记录 + 发布记录 + 运行信号 + 群聊 + 历史会话
+项目来源
+  -> 证据与索引
+  -> 上下文管理器
+  -> Hermes 只读调查
+  -> 事实、未知与冲突
+  -> 知识缺口 / 记忆提案
+  -> 审核、补源、重新检查
+  -> 更可靠的下一轮上下文
 ```
 
-普通聊天机器人通常只能根据输入上下文生成答案，无法可靠判断：
+ProjectLens 的核心价值是：**控制模型本轮能看到什么，保存哪些内容可以成为长期知识，并把回答中的“不确定”转化为可以继续处理的知识缺口。**
 
-- 这些资料是否属于当前项目；
-- 当前用户是否有权查看这些内容；
-- 信息是否已经过期；
-- 一个结论到底来自哪条证据；
-- 没有证据时应该回答“不知道”，还是继续猜测。
+这是一个 MIT 许可的开源项目原型，当前版本为 `0.1.0`。公开仓库包含核心代码、示例数据、测试和技术文档，不包含生产凭据、真实项目配置、运行数据库或内部过程材料。
 
-ProjectLens 把这些问题放进运行时流程中处理：先解析身份和项目绑定，再计算有效访问范围，随后检索证据、驱动 Agent 工具循环、校验事实和未知项，最后保存运行轨迹与审计信息。
+## 三个核心系统
 
-## 适合什么场景
+### 1. 上下文管理器：决定本轮应该带什么
 
-### 项目状态问答
+上下文管理器解决的不是“如何把更多文本塞进模型”，而是：
 
-例如：
+> 对当前问题、当前项目和当前操作者来说，哪些信息值得进入这一次推理？
 
-- 这个项目当前是做什么的？
-- 最近一次发布改了哪些内容？
-- 当前有哪些开放风险？
-- 哪些需求已经实现，哪些还没有证据？
+它管理三类上下文：
 
-### 代码与文档调查
+```text
+会话上下文：当前问题、历史轮次、摘要和用户明确选择的内容
+证据上下文：本次检索得到的代码、文档、任务、发布和运行证据
+长期上下文：经过权限校验和生命周期管理的 ProjectMemory
+```
 
-例如：
+上下文管理器的主要职责：
 
-- `create_order` 为什么要检查 `coupon`？
-- 订单服务的主要依赖是什么？
-- 某个变更会影响哪些模块？
-- 这个问题在代码、文档和任务中分别有什么记录？
+- 根据项目、用户角色、群聊可见性和来源白名单计算可用范围；
+- 为系统提示、历史、问题、工具 schema、工具结果和输出预留分配 token 预算；
+- 对重复内容去重，对历史内容摘要，对低优先级内容裁剪，必要时旋转旧上下文；
+- 保留项目边界、权限结果、关键证据、正式记忆和用户明确选择的内容；
+- 在运行开始时冻结实际使用的上下文，并保存内容 hash、来源引用和渲染版本；
+- 如果运行期间上下文、权限或记忆发生变化，返回显式变更错误，而不是静默替换输入。
 
-### 项目知识治理
+核心实现包括：
 
-例如：
+- `ContextGovernor`：请求级 token 预算、去重、摘要、裁剪和阻断；
+- `ContextSnapshot`：本次运行实际使用内容的冻结快照；
+- `ContextPack` / `ContextPrompt`：把身份、证据、记忆和任务组织成模型输入；
+- `ConversationSession`：保存跨轮会话、历史摘要和上下文引用。
 
-- 哪些知识缺口反复出现？
-- 哪些记忆需要人工审核？
-- 哪些事实之间存在冲突？
-- 哪些来源还没有同步或缺少时间信息？
+这使得 ProjectLens 可以回答“模型为什么看到了这些信息”，也可以在审计或重放时复原本次运行的上下文边界。
 
-### 团队入口整合
+### 2. 知识缺口：把“不知道”变成可处理对象
 
-ProjectLens 当前提供以下入口：
+普通 Agent 遇到资料不足时，通常只返回一句“无法确定”。ProjectLens 会把有治理价值的未知转化为结构化 Knowledge Gap：
 
-- FastAPI HTTP API；
-- 飞书 HTTP 事件回调；
-- 飞书 WebSocket 长连接；
-- MCP stdio server。
+```text
+当前问题 / 检索结果
+  -> 缺少来源、来源冲突、来源过期或缺少负责人
+  -> 生成稳定的 Knowledge Gap
+  -> 聚合重复观察
+  -> 分配负责人或提出补充动作
+  -> 同步来源、重新索引、recheck
+  -> resolved 或 reopened
+```
 
-## 一个回答长什么样
+当前缺口类型包括：
 
-用户提出问题后，ProjectLens 不只返回一段模型文本，而是生成一个回答信封（answer envelope）。典型结构如下：
+- `missing_source`：没有找到必要来源；
+- `conflicting_sources`：多个来源互相矛盾；
+- `stale_source`：已有来源可能已经过期；
+- `missing_owner`：缺少负责人；
+- `missing_decision`：缺少决策记录；
+- `missing_schedule`：缺少时间安排；
+- `missing_acceptance`：缺少验收标准；
+- `access_limited`：信息可能存在，但当前权限无法查看；
+- `unclear_question`：问题本身还不足以生成可靠调查。
+
+Knowledge Gap 不是简单的 TODO 列表。它具有：
+
+- 稳定的 `canonical_key`，相同问题会累积观察而不是重复建单；
+- 项目、问题、影响、严重程度、证据状态和来源引用；
+- 负责人、建议来源类型和关联任务；
+- `candidate -> open -> assigned -> waiting_for_source -> resolved_pending_check -> resolved/reopened` 生命周期；
+- 每次状态变化、观察、动作和重新检查的审计记录；
+- 按项目、负责人和周期生成的 Digest。
+
+关闭缺口不等于有人点击了“已处理”。只有补充来源、重新索引并完成 recheck 后，缺口才可以进入 `resolved`；如果新证据仍不能解决问题，系统会重新打开它。
+
+### 3. 记忆系统：让长期知识可审核、可撤销、可追溯
+
+ProjectLens 不把模型回答直接写入长期记忆。记忆分为不同层级：
+
+```text
+MemoryObservation / Episode
+    -> 运行观察或一次讨论摘要，不是已确认事实
+
+MemoryProposal
+    -> 等待证据、权限、冲突和人工决策检查的候选记忆
+
+ProjectMemory
+    -> 经过审批、可按权限和有效期检索的长期项目知识
+```
+
+长期记忆可以表示：
+
+- 架构事实和技术决策；
+- 业务规则和团队约定；
+- 负责人、风险和 Runbook；
+- 需求变更、复盘结论和发布约束。
+
+每条正式记忆都携带项目、类型、正文、来源、Evidence、可见范围、批准人、生效时间、失效时间和状态。常见状态包括：
+
+- `active`：可以在授权范围内进入检索结果；
+- `needs_review`：需要重新审核，不能当作稳定事实使用；
+- `revoked`：已撤销，不再参与正常检索；
+- `superseded`：已经被新版本替代。
+
+记忆检索的顺序是：
+
+```text
+候选召回
+  -> 项目、角色、visibility scope、有效期和状态校验
+  -> 词法 / 向量 / 混合排序
+  -> 预算控制和上下文组装
+```
+
+向量相似度只能帮助排序，不能绕过 ACL。来源失效、证据被撤销、有效期到期、出现冲突或收到反馈时，系统可以创建 MemoryReview，要求更新、撤销或替代原记忆。
+
+## 三个系统如何协同
+
+ProjectLens 的重点不是三个孤立模块，而是它们之间的反馈关系：
+
+```text
+代码 / 文档 / 任务 / 发布 / 运行信号 / 飞书资料
+                    |
+                    v
+          SourceRecord + Evidence + Index
+                    |
+                    v
+       身份、项目和权限范围计算
+                    |
+                    v
+       ContextGovernor / ContextSnapshot
+                    |
+                    v
+       Hermes 只读工具调查与回答
+                    |
+          +---------+---------+
+          |                   |
+          v                   v
+   MemoryProposal       KnowledgeGap
+          |                   |
+          v                   v
+      人工审核          补源 / 分配 / recheck
+          |                   |
+          +---------+---------+
+                    v
+          更新下一轮可用知识
+```
+
+这条链路解决三个常见问题：
+
+1. **上下文污染**：历史太多、资料重复或过期，导致模型看到不该看到的内容；
+2. **知识沉淀失控**：一次不可靠回答被误当成长期事实；
+3. **问题无法闭环**：系统知道资料不足，却没有负责人、动作和重新验证过程。
+
+## 一个典型流程
+
+以“订单服务的优惠券逻辑为什么这样实现”为例：
+
+1. ProjectSpace 确定当前用户属于 `payment` 项目，并限制可读取的仓库和知识来源；
+2. 检索器从代码、任务和项目文档中找到相关 Evidence；
+3. 上下文管理器去重、排序并控制 token 预算，冻结本轮上下文；
+4. Hermes 使用只读工具继续调查实现、需求和历史变更；
+5. 回答验证器区分已确认事实、推断和仍未知的内容；
+6. 如果发现“没有记录谁维护优惠券规则”，系统创建 `missing_owner` 或 `missing_decision` 缺口；
+7. 如果用户确认了新的稳定规则，系统先创建 `MemoryProposal`，经过审批后才进入 `ProjectMemory`；
+8. 来源补齐后执行 recheck，缺口才会关闭，新的记忆才会影响后续上下文。
+
+## ProjectSpace：所有能力的项目边界
+
+ProjectSpace 是上下文、缺口和记忆共同使用的边界。它定义：
+
+- 租户和项目标识；
+- 仓库、文档和外部来源；
+- 成员、角色和访问范围；
+- 飞书群绑定和可见性；
+- 文件白名单和允许工具；
+- 检索、记忆和知识索引命名空间。
+
+示例配置位于 `config/projects/payment.json`，示例代码和资料位于 `examples/payment_service/`：
 
 ```json
 {
-  "ok": true,
-  "project": {
-    "tenant_id": "demo",
-    "project_id": "payment"
-  },
-  "answer_summary": "订单服务通过 coupon 参数决定折扣策略。当前证据显示该检查用于避免无效优惠券进入结算流程。",
-  "facts": [
+  "tenant_id": "demo",
+  "project_id": "payment",
+  "repositories": [
     {
-      "text": "create_order 会先校验 coupon，再计算订单金额。",
-      "citations": [
-        {
-          "source_id": "repo:payment_service:src/order_service.py"
-        }
-      ]
+      "name": "payment_service",
+      "path": "examples/payment_service",
+      "default_branch": "main"
     }
   ],
-  "inferences": [
-    "该校验可能用于保持结算阶段的输入稳定。"
+  "documents_root": "examples/payment_service/knowledge",
+  "members": [
+    {"actor_id": "user-1", "roles": ["developer"]}
   ],
-  "unknowns": [
-    "当前示例资料没有说明优惠券规则由哪个业务角色维护。"
-  ],
-  "citations": [],
-  "audit_ref": {
-    "allow_apply": false,
-    "agent_mode": "hermes"
-  }
+  "public_sources": ["knowledge/"],
+  "file_allowlist": ["src/", "tests/", "knowledge/"]
 }
-```
-
-字段含义：
-
-| 字段 | 含义 |
-| --- | --- |
-| `facts` | 有来源支持的事实，事实项应带引用 |
-| `inferences` | 基于证据的推断，不伪装成原始事实 |
-| `unknowns` | 当前资料无法确认的内容 |
-| `conflicts` | 不同来源之间的矛盾 |
-| `citations` | 本次回答使用的来源摘要 |
-| `audit_ref` | 运行模式、权限和执行边界等审计信息 |
-
-## ProjectLens 与普通 RAG 的区别
-
-普通 RAG 通常是“向量或关键词检索 -> 拼接文本 -> 生成回答”。ProjectLens 在这条链路上增加了项目和权限边界：
-
-| 普通 RAG | ProjectLens |
-| --- | --- |
-| 主要按文本相似度召回 | 先确定租户、项目、用户和会话范围 |
-| 召回内容未必属于当前项目 | 来源必须落在 ProjectSpace 和允许来源内 |
-| 模型直接总结检索文本 | Hermes 通过受控只读工具调查 |
-| 事实、推断和猜测容易混在一起 | 分离事实、推断、未知和冲突 |
-| 通常只返回最终文本 | 保存工具调用、证据引用、运行事件和审计信息 |
-| 权限常由上层应用另行处理 | 权限在检索前计算，并贯穿工具调用和回答回放 |
-
-ProjectLens 不是为了让模型代替项目系统，而是让 Agent 在项目系统已有事实的范围内工作。
-
-## 核心概念
-
-### ProjectSpace
-
-ProjectSpace 是一个项目的边界定义，描述：
-
-- 租户和项目标识；
-- 代码仓库和文档目录；
-- 任务、发布、运行信号等来源；
-- 飞书群绑定；
-- 成员和角色；
-- 允许读取的来源与路径；
-- 角色可以使用的工具；
-- 检索、记忆和知识索引命名空间。
-
-公开示例位于 `config/projects/payment.json`，对应的示例代码和资料位于 `examples/payment_service/`。
-
-### Evidence 与 SourceRecord
-
-外部来源不会直接作为一段无来源文本注入模型，而是被整理为带有来源、标识、时间和访问范围的记录。回答使用这些记录生成引用，便于追溯“这句话来自哪里”。
-
-### Hermes Agent
-
-Hermes 是生产问答路径中的 Agent runtime。ProjectLens 提供：
-
-- 当前项目和身份上下文；
-- 有效访问范围；
-- 受策略约束的只读工具；
-- 上下文预算；
-- 事实验证和审计记录。
-
-Hermes 负责模型调用和工具循环，但不能通过提示词或请求参数绕过 ProjectLens 的项目与权限边界。
-
-### Knowledge Gap 与 Memory
-
-回答中的未知项可以进入知识缺口流程，供项目成员补充和跟踪。长期记忆先进入候选或审核队列，不会因为一次模型回答就自动成为永久事实。
-
-## 工作流程
-
-```text
-请求入口
-  -> 身份、租户、会话和项目解析
-  -> ProjectSpace 与群聊绑定校验
-  -> 角色权限 ∩ 群聊可见性 ∩ 来源白名单
-  -> 证据、记忆、历史和知识索引检索
-  -> Hermes 只读工具循环
-  -> 事实 / 推断 / 未知 / 冲突校验
-  -> API、MCP 或飞书回答
-  -> 运行事件、引用、反馈和知识缺口持久化
 ```
 
 ## 快速开始
 
-### 环境要求
-
-- Python 3.12+
-- Git
-- Windows PowerShell、Linux shell 或 macOS shell
-
-本地默认使用 SQLite、示例 ProjectSpace 和 Stub provider，不需要真实模型、飞书或 GitHub 凭据即可启动服务。
-
-### 安装和启动
+要求 Python 3.12+。本地默认使用 SQLite、示例 ProjectSpace 和 Stub provider，不需要真实模型或飞书凭据。
 
 Windows PowerShell：
 
@@ -215,266 +238,67 @@ cp .env.example .env
 python -m uvicorn project_lens.main:app --host 127.0.0.1 --port 8000 --workers 1
 ```
 
-启动后打开：
-
-- Swagger UI：`http://127.0.0.1:8000/docs`
-- 健康检查：`GET /api/v1/health`
-- 就绪检查：`GET /api/v1/ready`
-- 发布门禁：`GET /api/v1/release-gate`
-
-PowerShell 验证：
-
-```powershell
-Invoke-RestMethod http://127.0.0.1:8000/api/v1/health
-Invoke-RestMethod http://127.0.0.1:8000/api/v1/ready
-Invoke-RestMethod http://127.0.0.1:8000/api/v1/release-gate
-```
-
-### 发起第一次项目问答
-
-开发环境下，Project Agent 路由可以使用可信身份请求头进行本地测试。下面的请求使用仓库中的 `demo/payment` 示例项目：
-
-```powershell
-$headers = @{
-  "X-ProjectLens-Actor-Id" = "u1"
-  "X-ProjectLens-Chat-Id" = "chat-1"
-  "X-ProjectLens-Tenant-Key" = "demo"
-  "X-ProjectLens-Chat-Type" = "group"
-}
-
-$body = @{
-  question = "order_service.py 里 create_order 为什么要检查 coupon？"
-  project = @{
-    tenant_id = "demo"
-    project_id = "payment"
-    service = "order-service"
-    environment = "production"
-  }
-  user_id = "u1"
-  channel_id = "chat-1"
-  audience = "team"
-  mode = "read_only"
-  format = "concise"
-} | ConvertTo-Json -Depth 5
-
-Invoke-RestMethod `
-  -Method Post `
-  -Uri http://127.0.0.1:8000/api/v1/project-agent/ask `
-  -Headers $headers `
-  -ContentType "application/json" `
-  -Body $body
-```
-
-这些身份请求头只适用于本地开发/测试。Pilot 或 production 环境必须配置 `PROJECT_LENS_SERVICE_TOKEN`，并通过部署侧身份系统提供可信 actor 上下文；不能让客户端自由填写 `actor_id` 来获得权限。
-
-## 配置方法
-
-配置使用 `PROJECT_LENS_` 前缀，并从 `.env` 读取。推荐复制 `.env.example` 后按环境修改，密钥不要提交。
-
-### 最小本地配置
-
-```dotenv
-PROJECT_LENS_ENV=development
-PROJECT_LENS_DATABASE_PATH=project_lens.db
-PROJECT_LENS_CONVERSATION_STORE=sqlite
-PROJECT_LENS_AGENT_MODE=hermes
-PROJECT_LENS_PROJECT_SPACES_DIR=config/projects
-PROJECT_LENS_MODEL_PROVIDER=stub
-PROJECT_LENS_MODEL_LIVE=false
-```
-
-### 常用配置组
-
-| 配置组 | 作用 | 本地默认行为 |
-| --- | --- | --- |
-| `DATABASE_PATH` / `CONVERSATION_STORE` | SQLite 和会话持久化 | SQLite、本地文件 |
-| `MODEL_*` | 通用模型 provider、模型和外呼开关 | Stub、外部调用关闭 |
-| `FEISHU_HERMES_*` | Hermes provider、模型和超时 | 生产问答使用 Hermes |
-| `KNOWLEDGE_*` / `EMBEDDING_*` | 词法、向量和混合检索 | 词法开启、向量关闭 |
-| `LOCAL_PROJECT_REGISTRY` | 以内联 JSON 注册项目 | 可为空，默认读取项目目录 |
-| `PROJECT_SPACES_DIR` | ProjectSpace JSON 目录 | `config/projects` |
-| `SERVICE_TOKEN` | 内部服务 API 鉴权 | pilot/production 建议必配 |
-| `MCP_TRUSTED_*` | MCP 受信任调用者身份 | 留空时对 MCP 请求失败关闭 |
-| `FEISHU_*` | 飞书应用、绑定和回调 | recording/off |
-| `OBSIDIAN_*` / `FEISHU_WIKI_*` | 派生知识写入 | 默认关闭 |
-| `FEISHU_HERMES_EXECUTION_ENABLED` | 工程执行路径 | 默认关闭 |
-
-完整字段和示例以 [.env.example](.env.example) 为准，行为说明见[配置与运行手册](docs/configuration-and-operations.md)。真实飞书、模型和 GitHub 凭据只能通过部署环境注入，不能写入 JSON、测试数据或文档。
-
-## 接入自己的项目
-
-### 最小 ProjectSpace
-
-新建 `config/projects/<project>.json`，最小结构可以是：
-
-```json
-{
-  "tenant_id": "demo",
-  "project_id": "payment",
-  "display_name": "Payment Service",
-  "repositories": [
-    {
-      "name": "payment_service",
-      "path": "examples/payment_service",
-      "default_branch": "main"
-    }
-  ],
-  "documents_root": "examples/payment_service/knowledge",
-  "members": [
-    {"actor_id": "user-1", "roles": ["developer"]}
-  ],
-  "public_sources": ["knowledge/"],
-  "file_allowlist": ["src/", "tests/", "knowledge/"]
-}
-```
-
-真实项目通常还需要配置：
-
-- `services` 和 `environments`；
-- `source_connectors`；
-- `feishu_chat_bindings`；
-- 角色策略和允许工具；
-- 任务、发布、运行信号等来源；
-- `access_scope`、`public_sources` 和文件白名单；
-- 检索、记忆和知识索引命名空间。
-
-每个飞书群只能绑定一个项目；没有加入成员列表的用户按 guest 范围处理。完整接入步骤见 [ProjectSpace 接入指南](docs/projectspace-onboarding-guide.md)。
-
-## HTTP API
-
-默认前缀为 `/api/v1`，运行中的 OpenAPI 文档是参数和响应的最终来源。
-
-### 常用接口
-
-| 路径 | 用途 |
-| --- | --- |
-| `/health` | 进程和基础依赖是否可响应 |
-| `/ready` | 数据库、ProjectSpace 和依赖是否就绪 |
-| `/release-gate` | 当前配置是否满足发布门禁 |
-| `/projects/snapshot` | 项目当前事实快照 |
-| `/projects/timeline` | 项目时间线 |
-| `/projects/change-impact` | 变更影响分析 |
-| `/projects/source-records` | 来源记录查询 |
-| `/projects/knowledge-gaps` | 知识缺口查询和状态处理 |
-| `/project-agent/ask` | 创建并执行一次项目问答运行 |
-| `/project-agent/tools` | 查看当前可用的受控工具 |
-| `/project-agent/tools/call` | 显式调用单个受控工具 |
-| `/project-agent/runs/*` | 查看运行详情和角色视图 |
-| `/runs/*` | 查看 AgentRun 和运行事件 |
-| `/feishu/events` | 飞书 HTTP 事件回调 |
-
-### `/project-agent/ask` 请求结构
-
-```json
-{
-  "question": "这个项目最近的主要风险是什么？",
-  "project": {
-    "tenant_id": "demo",
-    "project_id": "payment",
-    "service": "order-service",
-    "environment": "production"
-  },
-  "user_id": "u1",
-  "channel_id": "chat-1",
-  "audience": "team",
-  "mode": "read_only",
-  "format": "concise"
-}
-```
-
-接口会返回 `run_id` 和 `trace_id`，并在成功时提供 `answer_summary`、`facts`、`inferences`、`unknowns`、`conflicts`、`citations` 和 `audit_ref`。一次问答不是无状态的字符串生成，而是可以通过运行接口继续查看的 AgentRun。
-
-受保护的 Project Agent、记忆、Hermes 和写入接口需要可信 actor 或服务 token。不要把客户端传入的 `user_id`、`actor_id` 或 `channel_id` 当作身份凭证。
-
-## 飞书与 MCP
-
-### 飞书
-
-飞书支持两种互斥入口：
-
-1. HTTP 事件回调：部署在有公网 HTTPS 地址的服务后面；
-2. WebSocket 长连接：适合本地联调或不方便暴露回调地址的环境。
-
-本地长连接联调：
-
-```powershell
-py -3.12 -m pip install -e ".[dev,feishu-ws]"
-.\scripts\start-projectlens-feishu-ws.ps1
-```
-
-需要自行配置 App ID、App Secret、Verification Token、`FEISHU_PROJECT_BINDINGS`、测试群和成员 `open_id`。同一应用只能保持一条长连接；生产 HTTP 回调使用 `POST /api/v1/feishu/events`，不要同时运行 WS ingress。
-
-### MCP
-
-安装 `.[mcp]` 后可使用 `project-lens-mcp`。MCP stdio 没有 HTTP middleware，因此生产环境应配置 `MCP_TRUSTED_TENANT_ID`、`MCP_TRUSTED_ACTOR_ID`、`MCP_TRUSTED_CHAT_ID` 和 `MCP_TRUSTED_CHAT_TYPE`。身份未配置时应保持 fail closed。
-
-## 部署边界
-
-当前公开版本适合单机或单台 VM 部署，推荐架构如下：
+启动后可以访问 `http://127.0.0.1:8000/docs`，并检查：
 
 ```text
-客户端 / 飞书
-        ↓ HTTPS
-反向代理（TLS、域名、访问日志、请求限制）
-        ↓ 内网
-单个 Uvicorn worker
-        ↓
-SQLite + 持久化 trace + ProjectSpace 配置
+GET /api/v1/health
+GET /api/v1/ready
+GET /api/v1/release-gate
 ```
 
-必须注意：
+完整配置见 [.env.example](.env.example)，项目接入步骤见 [ProjectSpace 接入指南](docs/projectspace-onboarding-guide.md)。
 
-- 当前仓库没有 serverless、Docker 或云平台专用部署配置；
-- SQLite、进程内调度器和飞书长连接不适合直接横向扩展为多副本；
-- 生产入口只运行一个 Uvicorn worker，并由 systemd、容器编排或同类进程管理器负责重启；
-- `PROJECT_LENS_DATABASE_PATH`、`PROJECT_LENS_GENAI_TRACE_DIR` 和 `.env` 应放在持久化、权限受控的目录；
-- 飞书 HTTP 回调和 WebSocket 长连接只能启用一种；
-- HTTP 回调部署时监听 `0.0.0.0`，但服务本身不应直接承担公网 TLS；
-- 上线前通过 `/api/v1/health`、`/api/v1/ready` 和 `/api/v1/release-gate`；
-- pilot/production 配置 `PROJECT_LENS_SERVICE_TOKEN`，并配置 MCP 受信任身份；
-- 生产不要使用 `:memory:` 数据库，也不要把 `.env`、数据库或 trace 提交到 Git。
+## 接入方式
 
-## 数据、安全和权限
+ProjectLens 可以作为知识和上下文服务被不同入口调用：
 
-权限在检索和工具调用之前计算：
+- **FastAPI**：项目快照、检索、问答、记忆和 Knowledge Gap API；
+- **Hermes**：生产问答的 Agent runtime，通过 ProjectLens 的只读工具调查；
+- **飞书**：支持 HTTP 事件回调和 WebSocket 长连接；
+- **MCP**：通过 `project-lens-mcp` 暴露受信任的 ProjectLens 工具。
+
+飞书 HTTP 回调和 WebSocket 长连接是互斥入口，只启用一种。MCP 和生产 HTTP API 都必须配置可信身份或服务 token，不能让客户端自行声明 actor、项目或群聊权限。
+
+## 安全边界与部署限制
+
+权限在检索和工具调用前计算：
 
 ```text
 用户角色权限 ∩ 会话/群聊可见范围 ∩ 项目资源权限 ∩ 来源白名单
 ```
 
-系统默认遵循以下边界：
+默认行为：
 
-- 不把模型记忆当作项目事实；
-- 不允许用户通过提示词或工具参数伪造身份、项目或权限；
+- 未经证据和审批，回答不会直接成为正式记忆；
+- 不允许通过提示词或工具参数扩大读取范围；
 - 不默认改代码、开 PR、部署、回滚或重启服务；
-- 写入和工程执行需要独立开关与审批链路；
-- 测试模式和 pytest 运行期间阻断真实外部调用；
-- `.env`、数据库、trace、真实 token 和真实业务资料不能进入公开仓库。
+- 真实外部调用、Wiki 发布、Obsidian 导出和工程执行都由独立开关控制；
+- `.env`、数据库、trace、真实 token 和业务资料不能提交到 Git。
 
-发现凭据泄露、越权读取、跨项目数据泄露或未审批写入问题，请参阅 [SECURITY.md](SECURITY.md)，不要在公开 Issue 中提交敏感信息。
+当前版本适合单机或单台 VM 部署。SQLite、进程内调度器和飞书长连接不适合直接扩展为多副本服务；生产环境使用单个 Uvicorn worker、HTTPS 反向代理和持久化数据库目录。详细说明见[配置与运行手册](docs/configuration-and-operations.md)。
 
-## 代码结构
+## 代码入口
 
 ```text
-src/project_lens/  API、Agent、应用服务、上下文检索、项目空间、运行时与集成
-config/projects/   ProjectSpace JSON 示例
-examples/          示例项目代码与知识数据
-tests/             单元、接口、集成和安全回归
-scripts/           启动、冒烟和真实联调脚本
-docs/              架构、配置、接入和开发文档
-evaluation/        脱敏评测配置和数据集
+src/project_lens/context/       证据、检索、上下文预算、记忆检索和存储
+src/project_lens/workflow/      ContextPack、ContextPrompt、ContextSnapshot
+src/project_lens/domain/        ProjectMemory、MemoryProposal、KnowledgeGap 模型
+src/project_lens/application/   问答、记忆、知识缺口、recheck 和运行编排
+src/project_lens/project_space/ 项目注册、角色策略、可见性和访问范围
+src/project_lens/api/           HTTP API、schema 和鉴权中间件
+tests/                          上下文、记忆、知识缺口、权限和接口回归测试
+docs/                           架构、配置、接入和开发文档
 ```
 
-主要模块：
+建议从以下代码开始阅读：
 
-| 模块 | 责任 |
-| --- | --- |
-| `src/project_lens/api/` | FastAPI 路由、schema 和鉴权中间件 |
-| `src/project_lens/application/` | 项目问答、知识缺口、记忆、运行和集成编排 |
-| `src/project_lens/context/` | 证据、来源、检索、快照和上下文构建 |
-| `src/project_lens/project_space/` | 项目注册、角色策略、可见性和访问范围 |
-| `src/project_lens/integrations/` | 飞书、Hermes、MCP、GitHub 等适配器 |
-| `src/project_lens/persistence/` | SQLite 和运行数据持久化 |
+- 上下文预算：`src/project_lens/context/governor.py`
+- 上下文冻结：`src/project_lens/workflow/context_snapshot.py`
+- 上下文组装：`src/project_lens/workflow/context_pack.py`
+- 记忆模型：`src/project_lens/domain/memory.py`
+- 记忆检索与授权：`src/project_lens/context/memory_retrieval.py`、`src/project_lens/context/memory_authorization.py`
+- 知识缺口模型：`src/project_lens/domain/knowledge_gap.py`
+- 知识缺口编排：`src/project_lens/application/knowledge_gap_service.py`
 
 ## 测试与开发
 
@@ -485,49 +309,35 @@ py -3.12 -m compileall -q src tests
 py -3.12 -m pytest -q tests/test_project_intro.py tests/test_project_agent_ask_api.py tests/test_runtime_security.py tests/test_security_evaluation.py
 ```
 
-按主题运行：
+核心能力相关测试：
 
 ```powershell
-py -3.12 -m pytest tests/test_project_intro.py tests/test_project_agent_ask_api.py -q
-py -3.12 -m pytest tests/test_runtime_security.py tests/test_security_evaluation.py -q
-py -3.12 -m pytest tests/test_feishu_http_and_acl.py tests/test_feishu_ws_ingress.py -q
+py -3.12 -m pytest tests/test_context_engine.py tests/test_context_governor.py tests/test_context_snapshot.py -q
+py -3.12 -m pytest tests/test_memory* tests/test_knowledge_gap* -q
 ```
 
-完整测试集包含需要额外环境或仍在整理中的历史用例，发布前应在目标环境单独执行并记录结果。Ruff 可用于后续增量清理，当前既有代码仍有 lint 技术债。
-
-涉及权限、检索、Agent 工具、飞书或外部服务的改动必须补回归测试。贡献流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
-
-## 已知限制
-
-- 当前版本是开源项目原型，不承诺生产级高可用或特定行业合规结论；
-- 示例 ProjectSpace、代码和知识文件只是演示数据，不代表真实项目配置；
-- SQLite 和进程内调度器限制了多副本部署方式；
-- 向量检索、真实模型、飞书消息、Wiki 发布、Obsidian 导出和工程执行都由独立配置控制；
-- 设计文档中标记为“规划中”“待实施”或“目标架构”的内容不等于当前已实现能力；
-- 当文档与运行中的 OpenAPI 或配置模型冲突时，以代码和接口行为为准。
+完整测试集包含需要额外环境或仍在整理中的历史用例，发布前应在目标环境单独执行并记录结果。涉及权限、上下文、记忆、检索或 Knowledge Gap 的改动必须补回归测试。贡献流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 文档导航
 
-按目标查找：
-
-| 目标 | 文档 |
+| 主题 | 文档 |
 | --- | --- |
-| 了解产品和当前实现 | [项目说明](docs/project-introduction.md) |
-| 理解系统结构 | [架构与数据流](docs/architecture-and-data-flow.md) |
-| 配置和运行服务 | [配置与运行手册](docs/configuration-and-operations.md) |
-| 接入一个新项目 | [ProjectSpace 接入指南](docs/projectspace-onboarding-guide.md) |
-| 接入飞书 | [飞书快速上手](docs/feishu-test-quickstart.md) 和 [飞书配置清单](docs/feishu-setup.md) |
-| 理解检索、记忆和知识闭环 | [功能说明](docs/features-knowledge-memory-context.md) |
-| 理解核心算法 | [核心算法说明](docs/core-algorithm-description.md) |
-| 参与开发 | [CONTRIBUTING.md](CONTRIBUTING.md) |
-| 报告安全问题 | [SECURITY.md](SECURITY.md) |
+| 核心能力总览 | [知识、上下文、记忆与 Knowledge Gap](docs/features-knowledge-memory-context.md) |
+| 上下文与证据算法 | [核心算法说明](docs/core-algorithm-description.md) |
+| 配置和运行 | [配置与运行手册](docs/configuration-and-operations.md) |
+| 接入项目 | [ProjectSpace 接入指南](docs/projectspace-onboarding-guide.md) |
+| 飞书接入 | [飞书快速上手](docs/feishu-test-quickstart.md) 和 [飞书配置清单](docs/feishu-setup.md) |
+| 架构总览 | [架构与数据流](docs/architecture-and-data-flow.md) |
+| 开发贡献 | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| 安全问题 | [SECURITY.md](SECURITY.md) |
 
-## 开源说明
+## 当前边界
 
-- 许可证：[MIT License](LICENSE)
-- 公开仓库不承诺生产可用性、高可用性或特定行业合规结论；
-- 开启真实外部服务前，必须重新配置项目空间、身份绑定、访问权限、持久化数据库和备份策略；
-- 公开仓库不包含生产凭据和内部比赛材料。
+- 这是开源项目原型，不承诺生产级高可用或特定行业合规结论；
+- 示例代码、ProjectSpace 和知识文件只是演示数据；
+- 设计文档中标记为“规划中”“待实施”或“目标架构”的内容不等于当前已实现能力；
+- 向量检索、真实模型、飞书消息、Wiki 发布、Obsidian 导出和工程执行均需额外配置；
+- 当文档与运行中的 OpenAPI、配置模型或测试行为冲突时，以代码和接口行为为准。
 
 ## License
 
