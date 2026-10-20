@@ -1,0 +1,249 @@
+{
+  "tenant_id": "demo",
+  "project_id": "projectlens",
+  "display_name": "ProjectLens",
+  "repositories": [
+    {
+      "name": "project-lens",
+      "path": ".",
+      "default_branch": "main"
+    }
+  ],
+  "services": ["project-lens-api"],
+  "environments": ["local"],
+  "documents_root": "knowledge",
+  "access_scope": "project:projectlens:read",
+  "file_allowlist": [
+    "src/",
+    "docs/",
+    "tests/",
+    "config/",
+    "knowledge/"
+  ],
+  "public_sources": ["knowledge/", "docs/"],
+  "rag_namespace": "demo:projectlens:rag",
+  "graph_namespace": "demo:projectlens",
+  "memory_namespace": "demo:projectlens",
+  "source_connectors": [
+    {
+      "kind": "repo",
+      "name": "project-lens",
+      "path": "."
+    },
+    {
+      "kind": "documents",
+      "name": "project-lens-knowledge",
+      "path": "knowledge",
+      "namespace": "demo:projectlens:rag"
+    },
+    {
+      "kind": "feishu_bitable",
+      "name": "projectlens_knowledge_gaps",
+      "namespace": "demo:projectlens:rag",
+      "metadata": {
+        "app_token": "YOUR_FEISHU_BITABLE_APP_TOKEN",
+        "table_id": "YOUR_FEISHU_TABLE_ID",
+        "view_id": "YOUR_FEISHU_VIEW_ID",
+        "field_aliases": {
+          "title": "问题",
+          "status": "当前状态",
+          "owner": "责任角色",
+          "acceptance_criteria": "问题说明",
+          "risk": "风险说明",
+          "updated_at": "更新时间",
+          "gap_id": "问题编号",
+          "evidence": "参考依据",
+          "resolution_status": "处理状态"
+        },
+        "topic": "knowledge_gap",
+        "default_status": "unconfirmed",
+        "authority_scope": []
+      }
+    },
+    {
+      "kind": "github",
+      "name": "projectlens_github",
+      "namespace": "demo:projectlens:rag",
+      "metadata": {
+        "repository": "OWNER/REPOSITORY",
+        "default_branch": "main"
+      }
+    }
+  ],
+  "feishu_chat_bindings": [
+    {
+      "tenant_key": "feishu-demo",
+      "chat_id": "chat-1",
+      "visibility": "team_shared"
+    },
+    {
+      "tenant_key": "feishu-demo",
+      "chat_id": "hermes-chat",
+      "visibility": "team_shared"
+    },
+    {
+      "tenant_key": "YOUR_FEISHU_TENANT_KEY",
+      "chat_id": "YOUR_FEISHU_CHAT_ID",
+      "visibility": "team_shared"
+    }
+  ],
+  "default_skill_guides": ["project_intro"],
+  "members": [
+    {"actor_id": "u-project-owner", "roles": ["manager"]},
+    {"actor_id": "u1", "roles": ["developer"]},
+    {"actor_id": "hermes-user", "roles": ["developer"]},
+    {"actor_id": "example-developer", "roles": ["developer"]},
+    {"actor_id": "virtual-developer", "roles": ["developer"]},
+    {"actor_id": "virtual-product", "roles": ["product"]},
+    {"actor_id": "virtual-qa", "roles": ["qa"]},
+    {"actor_id": "virtual-manager", "roles": ["manager"]},
+    {"actor_id": "virtual-ops", "roles": ["ops"]}
+  ],
+  "role_policies": [
+    {
+      "actor_id": "u1",
+      "role": "developer",
+      "readable_sources": ["src/", "docs/", "tests/", "config/", "knowledge/"],
+      "allowed_tools": [
+        "search_context",
+        "read_project_file",
+        "authorized_evidence",
+        "list_knowledge_gaps",
+        "search_wiki",
+        "read_wiki_page",
+        "sync_sources",
+        "export_obsidian",
+        "lint_wiki",
+        "import_obsidian_inbox",
+        "propose_wiki_update"
+      ],
+      "forbidden_sources": ["secrets/", ".env", "*.db"],
+      "answer_depth": "detailed",
+      "answer_style": "technical",
+      "visibility_level": "team_shared"
+    },
+    {
+      "actor_id": "hermes-user",
+      "role": "developer",
+      "readable_sources": ["src/", "docs/", "tests/", "config/", "knowledge/"],
+      "allowed_tools": [
+        "search_context",
+        "read_project_file",
+        "authorized_evidence",
+        "list_knowledge_gaps",
+        "search_wiki",
+        "read_wiki_page",
+        "sync_sources",
+        "export_obsidian",
+        "lint_wiki",
+        "import_obsidian_inbox",
+        "propose_wiki_update"
+      ],
+      "forbidden_sources": ["secrets/", ".env", "*.db"],
+      "answer_depth": "detailed",
+      "answer_style": "technical",
+      "visibility_level": "team_shared"
+    },
+    {
+      "actor_id": "example-developer",
+      "role": "developer",
+      "readable_sources": ["src/", "docs/", "tests/", "config/", "knowledge/", "README.md"],
+      "allowed_tools": [
+        "search_context",
+        "read_project_file",
+        "list_project_files",
+        "authorized_evidence",
+        "list_knowledge_gaps",
+        "search_wiki",
+        "read_wiki_page",
+        "sync_sources",
+        "export_obsidian",
+        "lint_wiki",
+        "import_obsidian_inbox",
+        "propose_wiki_update",
+        "search_project_memory",
+        "get_memory_detail",
+        "search_project_history",
+        "get_run_detail",
+        "get_citation_body",
+        "propose_test_plan",
+        "propose_risk_escalation",
+        "propose_project_todo",
+        "verify_evidence_links"
+      ],
+      "forbidden_sources": ["secrets/", ".env", "*.db", ".git/"],
+      "answer_depth": "detailed",
+      "answer_style": "technical",
+      "visibility_level": "team_shared"
+    }
+  ],
+  "chat_visibility_policies": [
+    {
+      "chat_id": "chat-1",
+      "visibility_level": "team_shared",
+      "allowed_roles": ["developer", "qa", "guest", "manager"],
+      "readable_sources": ["src/", "docs/", "tests/", "config/", "knowledge/"],
+      "allowed_tools": [
+        "search_context",
+        "read_project_file",
+        "authorized_evidence",
+        "list_knowledge_gaps",
+        "search_wiki",
+        "read_wiki_page",
+        "sync_sources",
+        "export_obsidian",
+        "lint_wiki",
+        "import_obsidian_inbox",
+        "propose_wiki_update"
+      ]
+    },
+    {
+      "chat_id": "hermes-chat",
+      "visibility_level": "team_shared",
+      "allowed_roles": ["developer", "qa", "guest", "manager"],
+      "readable_sources": ["src/", "docs/", "tests/", "config/", "knowledge/"],
+      "allowed_tools": [
+        "search_context",
+        "read_project_file",
+        "authorized_evidence",
+        "list_knowledge_gaps",
+        "search_wiki",
+        "read_wiki_page",
+        "sync_sources",
+        "export_obsidian",
+        "lint_wiki",
+        "import_obsidian_inbox",
+        "propose_wiki_update"
+      ]
+    },
+    {
+      "chat_id": "YOUR_FEISHU_CHAT_ID",
+      "visibility_level": "team_shared",
+      "allowed_roles": ["developer", "qa", "guest", "manager", "ops", "product"],
+      "readable_sources": ["src/", "docs/", "tests/", "config/", "knowledge/", "README.md"],
+      "allowed_tools": [
+        "search_context",
+        "read_project_file",
+        "list_project_files",
+        "authorized_evidence",
+        "list_knowledge_gaps",
+        "search_wiki",
+        "read_wiki_page",
+        "sync_sources",
+        "export_obsidian",
+        "lint_wiki",
+        "import_obsidian_inbox",
+        "propose_wiki_update",
+        "search_project_memory",
+        "get_memory_detail",
+        "search_project_history",
+        "get_run_detail",
+        "get_citation_body",
+        "propose_test_plan",
+        "propose_risk_escalation",
+        "propose_project_todo",
+        "verify_evidence_links"
+      ]
+    }
+  ]
+}
