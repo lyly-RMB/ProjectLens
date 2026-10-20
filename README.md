@@ -1,298 +1,191 @@
 # ProjectLens
 
-ProjectLens 是一个面向研发团队的**项目上下文管理与知识闭环系统**。
+ProjectLens 是面向软件研发团队的项目理解与协作 Agent 平台。
 
-它不只是把资料交给一个聊天模型，而是管理一条更严格的链路：
+它解决的不是“如何把一个大模型接进群聊”，而是如何让产品、研发、测试、项目经理和管理者围绕同一批**授权、可追溯、可验证的项目事实**协作。
 
-```text
-项目来源
-  -> 证据与索引
-  -> 上下文管理器
-  -> Hermes 只读调查
-  -> 事实、未知与冲突
-  -> 知识缺口 / 记忆提案
-  -> 审核、补源、重新检查
-  -> 更可靠的下一轮上下文
-```
+ProjectLens 为 Hermes 等 Agent Runtime 提供项目边界、身份校验、权限控制、证据检索、上下文治理、记忆审批和知识缺口闭环，使 AI 能够进入真实研发协作场景，同时保持可解释、可审计和可控。
 
-ProjectLens 的核心价值是：**控制模型本轮能看到什么，保存哪些内容可以成为长期知识，并把回答中的“不确定”转化为可以继续处理的知识缺口。**
+## 为什么需要 ProjectLens
 
-这是一个 MIT 许可的开源项目原型，当前版本为 `0.1.0`。公开仓库包含核心代码、示例数据、测试和技术文档，不包含生产凭据、真实项目配置、运行数据库或内部过程材料。
+研发团队使用不同语言关注同一个项目：产品关注目标和需求范围，研发关注代码和架构，测试关注验收和质量，项目经理关注进度和责任人，管理者关注交付和风险。
 
-## 三个核心系统
+传统资料分散在代码仓库、文档、任务、会议、测试和发布记录中。更大的问题是不同角色经常基于不同版本、不同权限和不同解释形成结论，导致：
 
-### 1. 上下文管理器：决定本轮应该带什么
+- 需求在业务语言和技术实现之间失真；
+- 会议结论留在聊天记录中，无法成为正式依据；
+- AI 被长群聊和无关历史干扰；
+- 新人 onboarding 依赖少数核心成员；
+- 测试发现风险后，项目管理侧难以快速判断影响；
+- AI 发现资料不足时只能说“不知道”，没人负责补全。
 
-上下文管理器解决的不是“如何把更多文本塞进模型”，而是：
+ProjectLens 把这些问题转化为项目边界、角色视图、Evidence、Context Snapshot、Memory Proposal 和 Knowledge Gap 等可治理对象。
 
-> 对当前问题、当前项目和当前操作者来说，哪些信息值得进入这一次推理？
+## 一句话定位
 
-它管理三类上下文：
+> ProjectLens 是企业研发团队的证据驱动项目协作 Agent。它让不同角色在不扩大权限的前提下，基于同一批项目事实理解问题、调查风险、沉淀知识并推动后续行动。
 
-```text
-会话上下文：当前问题、历史轮次、摘要和用户明确选择的内容
-证据上下文：本次检索得到的代码、文档、任务、发布和运行证据
-长期上下文：经过权限校验和生命周期管理的 ProjectMemory
-```
+## ProjectLens 与 Hermes 的关系
 
-上下文管理器的主要职责：
-
-- 根据项目、用户角色、群聊可见性和来源白名单计算可用范围；
-- 为系统提示、历史、问题、工具 schema、工具结果和输出预留分配 token 预算；
-- 对重复内容去重，对历史内容摘要，对低优先级内容裁剪，必要时旋转旧上下文；
-- 保留项目边界、权限结果、关键证据、正式记忆和用户明确选择的内容；
-- 在运行开始时冻结实际使用的上下文，并保存内容 hash、来源引用和渲染版本；
-- 如果运行期间上下文、权限或记忆发生变化，返回显式变更错误，而不是静默替换输入。
-
-核心实现包括：
-
-- `ContextGovernor`：请求级 token 预算、去重、摘要、裁剪和阻断；
-- `ContextSnapshot`：本次运行实际使用内容的冻结快照；
-- `ContextPack` / `ContextPrompt`：把身份、证据、记忆和任务组织成模型输入；
-- `ConversationSession`：保存跨轮会话、历史摘要和上下文引用。
-
-这使得 ProjectLens 可以回答“模型为什么看到了这些信息”，也可以在审计或重放时复原本次运行的上下文边界。
-
-#### 上下文压缩的两层机制
-
-ProjectLens 不把上下文压缩简化为“只保留最后几条消息”，而是分成会话层和请求层两步处理。
-
-**会话层：管理跨轮历史。**
-
-- 默认保留最近 8 轮用户问题；
-- 写入第 9 轮及之后的内容时，压缩当前池中最旧的第 1～4 轮；
-- 压缩结果保留用户原问题、回答摘要和 Evidence 标识，原始轮次移出当前文本池但不丢失历史引用；
-- 默认不因为跨日就删除相关上下文，日期窗口由用户主动设置；
-- 用户可以引用历史对话或群聊消息，引用项保留时间、短标题和取回键，正文按需读取；
-- 群聊历史不默认全量落本地，细选的群聊内容通过来源接口按需获取。
-
-**请求层：管理本次模型调用的 token 预算。**
-
-Context Governor 会估算系统提示、历史、当前问题、工具 schema、工具结果、输出预留和运行开销。接近预算时按以下顺序处理：
+ProjectLens 不重复实现 Hermes 的模型推理和工具循环，而是为 Hermes 增加企业研发环境所需要的治理层：
 
 ```text
-去重 -> 摘要 -> 裁剪低优先级内容 -> 轮次旋转 -> 必要时阻断超预算请求
+Hermes：
+理解问题 -> 规划调查 -> 调用工具 -> 组织回答
+
+ProjectLens：
+确认项目 -> 验证身份 -> 过滤权限 -> 准备上下文
+-> 提供证据 -> 校验回答 -> 审批写入 -> 记录审计 -> 推动闭环
 ```
 
-压缩时优先保留：
+直接把 Hermes 接入飞书可以提供自然语言问答，但企业项目还需要知道当前讨论属于哪个项目、用户能访问哪些资料、回答来自哪些来源、哪些内容仍然未知，以及结论能否成为正式团队记忆。ProjectLens 负责这些边界和流程，Hermes 负责在受控范围内理解和调查。
 
-- 当前问题和用户明确选择的内容；
-- 项目边界、身份和权限结果；
-- 关键 Evidence、正式 ProjectMemory 和事实标识；
-- 决策、任务、负面约束和来源时间。
+## 核心能力
 
-压缩后的内容仍保留 `fact_id`、`evidence_id`、来源 key、时间和事实类型，避免摘要把推断变成事实。运行级 `ContextSnapshot` 用于冻结本次实际输入、内容 hash 和授权结果，服务于审计与重放；它不是把所有历史永久塞进模型，也不等同于用户编辑历史的界面对象。
+### ProjectSpace 项目边界
 
-### 2. 知识缺口：把“不知道”变成可处理对象
+ProjectSpace 将租户、项目、仓库、文档、连接器、飞书群、成员、角色策略和来源白名单绑定为一个运行时边界。
 
-普通 Agent 遇到资料不足时，通常只返回一句“无法确定”。ProjectLens 会把有治理价值的未知转化为结构化 Knowledge Gap：
+它让 Agent 在调用工具前明确：
+
+- 当前问题属于哪个项目；
+- 当前操作者是什么身份和角色；
+- 当前群聊能看到哪些内容；
+- 哪些来源允许进入调查；
+- 回答和写入允许达到什么范围。
+
+### 角色化项目问答
+
+同一条事实可以按不同角色的工作目标组织：
+
+| 角色 | 关注重点 |
+| --- | --- |
+| 产品经理 | 需求目标、业务规则、验收标准和待确认项 |
+| 研发工程师 | 模块关系、代码证据、依赖、变更影响和技术风险 |
+| 测试工程师 | 验收依据、回归范围、质量缺口和发布风险 |
+| 项目经理 | 进度、阻塞、负责人、缺口和协作状态 |
+| 管理者 | 交付、资源、关键风险和决策 |
+| 新人/实习生 | 项目目标、模块职责、流程和已确认背景 |
+
+角色视图不是简单改变语气，而是在同一批授权事实基础上调整信息优先级、解释深度和行动建议。
+
+### Evidence 驱动回答
+
+ProjectLens 将 Git、项目文档、任务、会议、测试、发布和运行信号统一为来源记录，再生成可用于回答的 Evidence。
+
+回答尽量区分：
+
+- 已有来源支持的事实；
+- 基于证据的推断；
+- 尚未确认的未知项；
+- 来源之间的冲突；
+- 已经过期或需要复查的内容。
+
+系统不会为了让回答看起来完整而编造没有来源支持的数字、状态、准确率、SLA 或风险结论。
+
+### Context Manager 与 Context Snapshot
+
+ProjectLens 根据问题、项目边界、角色、Evidence 相关性、记忆状态和 token 预算准备上下文：
 
 ```text
-当前问题 / 检索结果
-  -> 缺少来源、来源冲突、来源过期或缺少负责人
-  -> 生成稳定的 Knowledge Gap
-  -> 聚合重复观察
-  -> 分配负责人或提出补充动作
-  -> 同步来源、重新索引、recheck
-  -> resolved 或 reopened
+当前问题与用户选择
+-> 项目、身份、角色和权限
+-> 关键 Evidence 与正式 ProjectMemory
+-> 相关历史、工具结果和会议摘要
+-> 无关闲聊、重复消息和低优先级历史
 ```
 
-当前缺口类型包括：
+Context Snapshot 保存一次回答实际使用的历史、证据和记忆引用。来源、权限或记忆状态发生变化时，系统显式报告变化，而不是静默替换上下文。
 
-- `missing_source`：没有找到必要来源；
-- `conflicting_sources`：多个来源互相矛盾；
-- `stale_source`：已有来源可能已经过期；
-- `missing_owner`：缺少负责人；
-- `missing_decision`：缺少决策记录；
-- `missing_schedule`：缺少时间安排；
-- `missing_acceptance`：缺少验收标准；
-- `access_limited`：信息可能存在，但当前权限无法查看；
-- `unclear_question`：问题本身还不足以生成可靠调查。
+### 受控记忆
 
-Knowledge Gap 不是简单的 TODO 列表。它具有：
-
-- 稳定的 `canonical_key`，相同问题会累积观察而不是重复建单；
-- 项目、问题、影响、严重程度、证据状态和来源引用；
-- 负责人、建议来源类型和关联任务；
-- `candidate -> open -> assigned -> waiting_for_source -> resolved_pending_check -> resolved/reopened` 生命周期；
-- 每次状态变化、观察、动作和重新检查的审计记录；
-- 按项目、负责人和周期生成的 Digest。
-
-关闭缺口不等于有人点击了“已处理”。只有补充来源、重新索引并完成 recheck 后，缺口才可以进入 `resolved`；如果新证据仍不能解决问题，系统会重新打开它。
-
-### 3. 记忆系统：让长期知识可审核、可撤销、可追溯
-
-ProjectLens 不把模型回答直接写入长期记忆。记忆分为不同层级：
+Agent 的运行观察不能直接成为团队正式知识：
 
 ```text
-MemoryObservation / Episode
-    -> 运行观察或一次讨论摘要，不是已确认事实
-
-MemoryProposal
-    -> 等待证据、权限、冲突和人工决策检查的候选记忆
-
-ProjectMemory
-    -> 经过审批、可按权限和有效期检索的长期项目知识
+运行观察 / Episode
+-> MemoryProposal
+-> 证据、权限、冲突和有效期校验
+-> 人工审批
+-> ProjectMemory
+-> 复核、替代或撤销
 ```
 
-长期记忆可以表示：
+正式记忆可以关联来源、Evidence、提议人、审批人、可见范围、有效期和版本关系，避免一次对话中的临时判断污染项目知识。
 
-- 架构事实和技术决策；
-- 业务规则和团队约定；
-- 负责人、风险和 Runbook；
-- 需求变更、复盘结论和发布约束。
+### Knowledge Gap 知识缺口闭环
 
-每条正式记忆都携带项目、类型、正文、来源、Evidence、可见范围、批准人、生效时间、失效时间和状态。常见状态包括：
-
-- `active`：可以在授权范围内进入检索结果；
-- `needs_review`：需要重新审核，不能当作稳定事实使用；
-- `revoked`：已撤销，不再参与正常检索；
-- `superseded`：已经被新版本替代。
-
-记忆检索的顺序是：
+当系统发现资料缺失、来源冲突、来源过期、缺少负责人、缺少决策或缺少验收标准时，不只返回“不知道”，而是生成可治理的 Knowledge Gap：
 
 ```text
-候选召回
-  -> 项目、角色、visibility scope、有效期和状态校验
-  -> 词法 / 向量 / 混合排序
-  -> 预算控制和上下文组装
+发现缺口 -> 分配负责人 -> 补充资料或确认决策
+-> 重新同步与检索 -> 验证 -> 关闭缺口
 ```
 
-向量相似度只能帮助排序，不能绕过 ACL。来源失效、证据被撤销、有效期到期、出现冲突或收到反馈时，系统可以创建 MemoryReview，要求更新、撤销或替代原记忆。
+缺口保存影响、建议动作、责任人、状态、复查记录和关闭依据，帮助团队把不确定性转化为可执行的工作。
 
-## 三个系统如何协同
+## 典型场景
 
-ProjectLens 的重点不是三个孤立模块，而是它们之间的反馈关系：
+- 在飞书项目群中询问项目状态、需求、负责人、发布和风险；
+- 对代码变更生成产品、研发、测试和管理者都能理解的影响说明；
+- 检查需求、会议、任务、测试和发布记录是否一致；
+- 为新人提供受权限控制的项目 onboarding；
+- 通过记忆审批保存架构事实、团队约定和正式决策；
+- 通过 Knowledge Gap 推动资料补充、责任分配和复查；
+- 生成带来源、可审核的 Wiki 或知识页面草稿。
+
+## 技术架构
+
+```mermaid
+flowchart TB
+    INPUT[飞书 / FastAPI / MCP]
+    IDENTITY[Trusted Actor 与 ProjectSpace]
+    ACCESS[角色权限 ∩ 群聊范围 ∩ 来源 ACL]
+    CONTEXT[Context Manager 与 Evidence Retrieval]
+    HERMES[Hermes 只读工具循环]
+    VERIFY[回答校验：事实 / 推断 / 未知 / 冲突]
+    GOVERNANCE[记忆审批 / Knowledge Gap / Wiki 草稿]
+    SOURCES[Git / 文档 / 任务 / 会议 / 测试 / 发布]
+    STORE[(SQLite 与审计记录)]
+
+    INPUT --> IDENTITY --> ACCESS --> CONTEXT --> HERMES --> VERIFY
+    SOURCES --> CONTEXT
+    VERIFY --> GOVERNANCE
+    IDENTITY -.-> STORE
+    CONTEXT -.-> STORE
+    HERMES -.-> STORE
+    VERIFY -.-> STORE
+```
+
+核心对象：
+
+| 对象 | 作用 |
+| --- | --- |
+| `ProjectSpace` | 项目、成员、群聊和来源边界 |
+| `SourceRecord` | 统一记录外部来源、时间、权限和版本 |
+| `Evidence` | 支持回答和决策的可追溯证据 |
+| `AgentRun` | 一次调查、工具调用和回答运行 |
+| `ContextSnapshot` | 一次回答实际使用的上下文引用 |
+| `MemoryProposal` | 等待证据与人工确认的候选知识 |
+| `ProjectMemory` | 审批后的可复用项目事实 |
+| `Knowledge Gap` | 缺失、冲突、过期或无负责人的事项 |
+| `WikiPageDraft` | 带来源、待审核的项目文档草稿 |
+
+## 代码结构
 
 ```text
-代码 / 文档 / 任务 / 发布 / 运行信号 / 飞书资料
-                    |
-                    v
-          SourceRecord + Evidence + Index
-                    |
-                    v
-       身份、项目和权限范围计算
-                    |
-                    v
-       ContextGovernor / ContextSnapshot
-                    |
-                    v
-       Hermes 只读工具调查与回答
-                    |
-          +---------+---------+
-          |                   |
-          v                   v
-   MemoryProposal       KnowledgeGap
-          |                   |
-          v                   v
-      人工审核          补源 / 分配 / recheck
-          |                   |
-          +---------+---------+
-                    v
-          更新下一轮可用知识
+src/project_lens/  API、Agent、应用服务、上下文、项目空间和集成
+config/projects/   示例 ProjectSpace 配置
+examples/          示例项目数据
+tests/             单元、接口、集成和安全测试
+scripts/           启动、联调和冒烟脚本
+docs/              架构、配置、接口和接入文档
 ```
-
-这条链路解决三个常见问题：
-
-1. **上下文污染**：历史太多、资料重复或过期，导致模型看到不该看到的内容；
-2. **知识沉淀失控**：一次不可靠回答被误当成长期事实；
-3. **问题无法闭环**：系统知道资料不足，却没有负责人、动作和重新验证过程。
-
-## 一个典型流程
-
-以“订单服务的优惠券逻辑为什么这样实现”为例：
-
-1. ProjectSpace 确定当前用户属于 `payment` 项目，并限制可读取的仓库和知识来源；
-2. 检索器从代码、任务和项目文档中找到相关 Evidence；
-3. 上下文管理器去重、排序并控制 token 预算，冻结本轮上下文；
-4. Hermes 使用只读工具继续调查实现、需求和历史变更；
-5. 回答验证器区分已确认事实、推断和仍未知的内容；
-6. 如果发现“没有记录谁维护优惠券规则”，系统创建 `missing_owner` 或 `missing_decision` 缺口；
-7. 如果用户确认了新的稳定规则，系统先创建 `MemoryProposal`，经过审批后才进入 `ProjectMemory`；
-8. 来源补齐后执行 recheck，缺口才会关闭，新的记忆才会影响后续上下文。
-
-## ProjectSpace：所有能力的项目边界
-
-ProjectSpace 是上下文、缺口和记忆共同使用的边界。它定义：
-
-- 租户和项目标识；
-- 仓库、文档和外部来源；
-- 成员、角色和访问范围；
-- 飞书群绑定和可见性；
-- 文件白名单和允许工具；
-- 检索、记忆和知识索引命名空间。
-
-示例配置位于 `config/projects/payment.json`，示例代码和资料位于 `examples/payment_service/`：
-
-```json
-{
-  "tenant_id": "demo",
-  "project_id": "payment",
-  "repositories": [
-    {
-      "name": "payment_service",
-      "path": "examples/payment_service",
-      "default_branch": "main"
-    }
-  ],
-  "documents_root": "examples/payment_service/knowledge",
-  "members": [
-    {"actor_id": "user-1", "roles": ["developer"]}
-  ],
-  "public_sources": ["knowledge/"],
-  "file_allowlist": ["src/", "tests/", "knowledge/"]
-}
-```
-
-## 权限机制：先确定能看什么，再开始检索
-
-ProjectLens 的权限设计不是在模型生成回答后做文字过滤，而是在信息进入候选集之前计算有效访问范围。可信身份由入口侧提供，客户端传入的 `actor_id`、`tenant_id` 或 `project_id` 不能自行改变权限。
-
-### 有效访问范围
-
-系统将以下边界求交，得到 `EffectiveAccessScope`：
-
-```text
-EffectiveAccessScope
-  = 用户角色权限
-  ∩ 会话 / 群聊可见范围
-  ∩ ProjectSpace 项目范围
-  ∩ 来源 ACL
-  ∩ 记忆可见范围
-```
-
-只有通过范围计算的 SourceRecord、Evidence、ProjectMemory 和工具结果，才可以进入检索排序和模型上下文。这避免了“先把敏感内容召回，再在回答阶段过滤”的风险。
-
-### 权限检查的运行顺序
-
-```text
-TrustedActor
-  -> 租户 / 项目 / 群聊一致性校验
-  -> ProjectSpace 解析
-  -> 角色策略与群聊可见性求交
-  -> 来源和文件白名单过滤
-  -> 记忆 visibility / status / 有效期过滤
-  -> 受控工具白名单与参数校验
-  -> 角色化事实投影和回答
-```
-
-这条链路有几个关键原则：
-
-- **召回前过滤**：无权限内容不会先进入检索结果、排序器或上下文；
-- **工具也受权限约束**：角色允许读取哪些来源、使用哪些工具，由服务端的有效范围决定；
-- **记忆继承权限**：写入长期记忆不会扩大它的可见范围，记忆检索仍检查项目、角色、visibility、状态和有效期；
-- **角色只改变投影**：系统先维护统一事实，再按产品、研发、测试、项目经理或管理者角色过滤字段、调整关注点和解释深度，不复制多套事实；
-- **读写分离**：普通问答只使用只读工具，Wiki 发布、记忆审批、Obsidian 写入和工程执行需要独立开关及审批；
-- **身份不信任请求体**：请求中的用户和项目字段只是业务参数，不能替代入口侧可信身份；
-- **每个边界都可审计**：有效范围、工具调用、来源引用、记忆状态和拒绝原因写入运行事件。
-
-因此，ProjectLens 的权限机制保护的不是只有页面展示，而是保护“什么可以被召回、什么可以进入上下文、什么可以被工具读取、什么可以沉淀为长期知识”。
 
 ## 快速开始
 
-要求 Python 3.12+。本地默认使用 SQLite、示例 ProjectSpace 和 Stub provider，不需要真实模型或飞书凭据。
+要求 Python 3.12 或更高版本。
 
-Windows PowerShell：
+### Windows PowerShell
 
 ```powershell
 py -3.12 -m venv .venv
@@ -302,7 +195,7 @@ Copy-Item .env.example .env
 py -3.12 -m uvicorn project_lens.main:app --host 127.0.0.1 --port 8000 --workers 1
 ```
 
-Linux/macOS：
+### Linux/macOS
 
 ```bash
 python3.12 -m venv .venv
@@ -312,107 +205,128 @@ cp .env.example .env
 python -m uvicorn project_lens.main:app --host 127.0.0.1 --port 8000 --workers 1
 ```
 
-启动后可以访问 `http://127.0.0.1:8000/docs`，并检查：
+启动后：
 
-```text
-GET /api/v1/health
-GET /api/v1/ready
-GET /api/v1/release-gate
+- OpenAPI 页面：`http://127.0.0.1:8000/docs`
+- 健康检查：`GET /api/v1/health`
+- 就绪检查：`GET /api/v1/ready`
+- 发布门禁：`GET /api/v1/release-gate`
+
+默认使用本地示例项目配置、SQLite 和 stub 模型，不会自动调用外部模型或飞书。
+
+## 配置与接入
+
+复制 `.env.example` 为 `.env`，所有配置变量使用 `PROJECT_LENS_` 前缀。真实密钥只通过环境变量或部署平台 Secret 注入，不要写入 JSON、测试数据或文档。
+
+最小本地配置：
+
+```dotenv
+PROJECT_LENS_ENV=development
+PROJECT_LENS_DATABASE_PATH=project_lens.db
+PROJECT_LENS_CONVERSATION_STORE=sqlite
+PROJECT_LENS_AGENT_MODE=hermes
+PROJECT_LENS_PROJECT_SPACES_DIR=config/projects
+PROJECT_LENS_MODEL_PROVIDER=stub
+PROJECT_LENS_MODEL_LIVE=false
 ```
 
-完整配置见 [.env.example](.env.example)，项目接入步骤见 [ProjectSpace 接入指南](docs/projectspace-onboarding-guide.md)。
+最小 ProjectSpace 位于 `config/projects/<project>.json`：
+
+```json
+{
+  "tenant_id": "demo",
+  "project_id": "payment",
+  "service": "order-service",
+  "environment": "development",
+  "repository_root": "examples/payment_service/src",
+  "documents_root": "examples/payment_service/knowledge",
+  "members": [
+    {"actor_id": "user-1", "roles": ["developer"]}
+  ],
+  "public_sources": ["overview", "docs/public"]
+}
+```
+
+详细说明：
+
+- [配置与运行手册](docs/configuration-and-operations.md)
+- [ProjectSpace 接入指南](docs/projectspace-onboarding-guide.md)
+- [飞书配置清单](docs/feishu-setup.md)
+- [API 与集成指南](docs/api-and-integrations.md)
 
 ## 接入方式
 
-ProjectLens 可以作为知识和上下文服务被不同入口调用：
+### FastAPI
 
-- **FastAPI**：项目快照、检索、问答、记忆和 Knowledge Gap API；
-- **Hermes**：生产问答的 Agent runtime，通过 ProjectLens 的只读工具调查；
-- **飞书**：支持 HTTP 事件回调和 WebSocket 长连接；
-- **MCP**：通过 `project-lens-mcp` 暴露受信任的 ProjectLens 工具。
+适合项目服务、内部工具和反向代理后的 HTTP 服务。受保护接口要求可信 actor 或服务 token，不能把客户端传入的 `actor_id` 当作身份凭证。
 
-飞书 HTTP 回调和 WebSocket 长连接是互斥入口，只启用一种。MCP 和生产 HTTP API 都必须配置可信身份或服务 token，不能让客户端自行声明 actor、项目或群聊权限。
+### 飞书
 
-## 安全边界与部署限制
+支持飞书 HTTP 事件回调和 WebSocket 长连接，两种入口只能启用一种：
 
-权限在检索和工具调用前计算：
-
-```text
-用户角色权限 ∩ 会话/群聊可见范围 ∩ 项目资源权限 ∩ 来源白名单
+```powershell
+py -3.12 -m pip install -e ".[dev,feishu-ws]"
+.\scripts\start-projectlens-feishu-ws.ps1
 ```
 
-默认行为：
+生产 HTTP 回调使用 `POST /api/v1/feishu/events`。HTTP 回调部署时应关闭 `PROJECT_LENS_FEISHU_LONG_CONNECTION_ENABLED`。
 
-- 未经证据和审批，回答不会直接成为正式记忆；
-- 不允许通过提示词或工具参数扩大读取范围；
-- 不默认改代码、开 PR、部署、回滚或重启服务；
-- 真实外部调用、Wiki 发布、Obsidian 导出和工程执行都由独立开关控制；
-- `.env`、数据库、trace、真实 token 和业务资料不能提交到 Git。
+### MCP
 
-当前版本适合单机或单台 VM 部署。SQLite、进程内调度器和飞书长连接不适合直接扩展为多副本服务；生产环境使用单个 Uvicorn worker、HTTPS 反向代理和持久化数据库目录。详细说明见[配置与运行手册](docs/configuration-and-operations.md)。
+安装 `.[mcp]` 后可以使用 `project-lens-mcp`。MCP stdio 不经过 HTTP middleware，因此生产环境必须配置受信任的租户、操作者、群聊和调用类型。
 
-## 代码入口
+## 部署边界
 
-```text
-src/project_lens/context/       证据、检索、上下文预算、记忆检索和存储
-src/project_lens/workflow/      ContextPack、ContextPrompt、ContextSnapshot
-src/project_lens/domain/        ProjectMemory、MemoryProposal、KnowledgeGap 模型
-src/project_lens/application/   问答、记忆、知识缺口、recheck 和运行编排
-src/project_lens/project_space/ 项目注册、角色策略、可见性和访问范围
-src/project_lens/api/           HTTP API、schema 和鉴权中间件
-tests/                          上下文、记忆、知识缺口、权限和接口回归测试
-docs/                           架构、配置、接入和开发文档
-```
+当前公开版本适合单台 VM 或主机上的单进程部署：
 
-建议从以下代码开始阅读：
+- 使用一个 Uvicorn worker；
+- 使用 systemd、容器进程管理器或同类工具负责重启；
+- 由 HTTPS 反向代理处理域名、TLS、请求体限制和访问日志；
+- `PROJECT_LENS_DATABASE_PATH` 和 trace 目录放在持久化、权限受控的位置；
+- HTTP 回调和 WebSocket 长连接只启用一个；
+- 上线前通过 `/api/v1/health`、`/api/v1/ready` 和 `/api/v1/release-gate`。
 
-- 上下文预算：`src/project_lens/context/governor.py`
-- 上下文冻结：`src/project_lens/workflow/context_snapshot.py`
-- 上下文组装：`src/project_lens/workflow/context_pack.py`
-- 记忆模型：`src/project_lens/domain/memory.py`
-- 记忆检索与授权：`src/project_lens/context/memory_retrieval.py`、`src/project_lens/context/memory_authorization.py`
-- 知识缺口模型：`src/project_lens/domain/knowledge_gap.py`
-- 知识缺口编排：`src/project_lens/application/knowledge_gap_service.py`
+当前 SQLite、进程内调度器和长连接设计不适合直接扩展为多副本或 serverless 服务。需要高可用部署时，应先替换共享存储、调度器、锁和连接管理方案。
+
+## 安全边界
+
+ProjectLens 默认关闭高风险能力：
+
+- 不默认修改代码、创建 PR、部署、回滚或重启；
+- 不允许通过提示词伪造身份、项目或权限；
+- 不把模型输出直接写入正式记忆；
+- 不把受限来源因为进入记忆而扩大可见范围；
+- 不在缺少 Evidence 时编造结论。
+
+请阅读 [SECURITY.md](SECURITY.md)。不要提交 `.env`、数据库、trace、真实飞书绑定、API key、App Secret、服务 token 或内部业务资料。
 
 ## 测试与开发
 
-公开仓库的 GitHub Actions 运行编译检查和不需要外部凭据的 smoke tests：
+公开 smoke CI 使用以下命令：
 
-```powershell
-py -3.12 -m compileall -q src tests
-py -3.12 -m pytest -q tests/test_project_intro.py tests/test_project_agent_ask_api.py tests/test_runtime_security.py tests/test_security_evaluation.py
+```bash
+python -m compileall -q src tests
+python -m pytest -q \
+  tests/test_project_intro.py \
+  tests/test_project_agent_ask_api.py \
+  tests/test_runtime_security.py \
+  tests/test_security_evaluation.py
 ```
 
-核心能力相关测试：
+本地可以运行完整测试：
 
-```powershell
-py -3.12 -m pytest tests/test_context_engine.py tests/test_context_governor.py tests/test_context_snapshot.py -q
-py -3.12 -m pytest tests/test_memory* tests/test_knowledge_gap* -q
+```bash
+python -m pytest -q
+python -m ruff check .
 ```
 
-完整测试集包含需要额外环境或仍在整理中的历史用例，发布前应在目标环境单独执行并记录结果。涉及权限、上下文、记忆、检索或 Knowledge Gap 的改动必须补回归测试。贡献流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+完整测试和全量 Ruff 检查仍包含需要额外环境或逐步清理的历史用例；提交改动时至少运行公开 smoke CI 对应的检查，并为权限、检索、Agent 工具和外部集成补充回归测试。
 
-## 文档导航
+## 开源说明
 
-| 主题 | 文档 |
-| --- | --- |
-| 核心能力总览 | [知识、上下文、记忆与 Knowledge Gap](docs/features-knowledge-memory-context.md) |
-| 上下文与证据算法 | [核心算法说明](docs/core-algorithm-description.md) |
-| 配置和运行 | [配置与运行手册](docs/configuration-and-operations.md) |
-| 接入项目 | [ProjectSpace 接入指南](docs/projectspace-onboarding-guide.md) |
-| 飞书接入 | [飞书快速上手](docs/feishu-test-quickstart.md) 和 [飞书配置清单](docs/feishu-setup.md) |
-| 架构总览 | [架构与数据流](docs/architecture-and-data-flow.md) |
-| 开发贡献 | [CONTRIBUTING.md](CONTRIBUTING.md) |
-| 安全问题 | [SECURITY.md](SECURITY.md) |
+- 许可证：[MIT License](LICENSE)
+- 贡献指南：[CONTRIBUTING.md](CONTRIBUTING.md)
+- 安全策略：[SECURITY.md](SECURITY.md)
+- 项目文档：[docs/README.md](docs/README.md)
 
-## 当前边界
-
-- 这是开源项目原型，不承诺生产级高可用或特定行业合规结论；
-- 示例代码、ProjectSpace 和知识文件只是演示数据；
-- 设计文档中标记为“规划中”“待实施”或“目标架构”的内容不等于当前已实现能力；
-- 向量检索、真实模型、飞书消息、Wiki 发布、Obsidian 导出和工程执行均需额外配置；
-- 当文档与运行中的 OpenAPI、配置模型或测试行为冲突时，以代码和接口行为为准。
-
-## License
-
-ProjectLens is released under the [MIT License](LICENSE).
+公开仓库包含核心代码、示例数据、测试和技术文档，不包含生产凭据、真实项目配置、运行数据库、内部过程材料或竞赛材料。项目当前版本为 `0.1.0`，处于持续开发阶段，不承诺生产可用性、高可用性或特定行业合规结论。
