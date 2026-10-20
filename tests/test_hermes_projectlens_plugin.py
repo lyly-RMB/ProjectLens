@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import threading
@@ -478,10 +479,13 @@ def test_build_openai_tool_schema_includes_context_params() -> None:
 def test_hermes_tool_registry_smoke_against_fake_http(tmp_path: Path) -> None:
     """Unit-level stand-in: Hermes kwargs registration + HTTP tools/call.
 
-    Full PluginManager live smoke is covered by CLI against hermes-agent-main.
+    Full PluginManager live smoke is covered by CLI against a configured Hermes checkout.
     """
 
-    hermes_repo = Path(r"C:\Users\Administrator\Desktop\hermes-agent-main")
+    hermes_repo_value = os.environ.get("PROJECT_LENS_HERMES_REPO")
+    if not hermes_repo_value:
+        pytest.skip("PROJECT_LENS_HERMES_REPO is not configured")
+    hermes_repo = Path(hermes_repo_value)
     if not (hermes_repo / "hermes_cli" / "plugins.py").is_file():
         pytest.skip("hermes-agent-main not available")
 

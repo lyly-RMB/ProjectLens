@@ -150,9 +150,9 @@ Phase 4 第二刀已由 Codex 完成。
 ## 验收命令
 
 ```powershell
-& 'C:\Users\Administrator\AppData\Local\Programs\Python\Python312\python.exe' -m pytest tests/test_project_space_manifest.py tests/test_project_space_policies.py tests/test_project_registry.py -q
-& 'C:\Users\Administrator\AppData\Local\Programs\Python\Python312\python.exe' -m pytest tests/test_project_space_inspect_api.py -q
-& 'C:\Users\Administrator\AppData\Local\Programs\Python\Python312\python.exe' -m ruff check src/project_lens/project_space src/project_lens/application/project_space_inspect.py tests/test_project_space_manifest.py tests/test_project_space_policies.py tests/test_project_registry.py tests/test_project_space_inspect_api.py
+py -3.12 -m pytest tests/test_project_space_manifest.py tests/test_project_space_policies.py tests/test_project_registry.py -q
+py -3.12 -m pytest tests/test_project_space_inspect_api.py -q
+py -3.12 -m ruff check src/project_lens/project_space src/project_lens/application/project_space_inspect.py tests/test_project_space_manifest.py tests/test_project_space_policies.py tests/test_project_registry.py tests/test_project_space_inspect_api.py
 ```
 
 本次验证结果：

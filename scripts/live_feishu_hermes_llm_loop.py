@@ -30,17 +30,19 @@ def _load_dotenv(path: Path) -> None:
 
 def main() -> int:
     _load_dotenv(ROOT / ".env")
-    hermes_env = Path(os.environ.get("HERMES_HOME", Path.home() / "AppData/Local/hermes")) / ".env"
-    # Windows HERMES_HOME override
-    hermes_env = Path(r"C:\Users\Administrator\AppData\Local\hermes\.env")
+    hermes_env = Path(
+        os.environ.get(
+            "HERMES_ENV_FILE",
+            Path(os.environ.get("HERMES_HOME", Path.home() / ".config/hermes")) / ".env",
+        )
+    )
     _load_dotenv(hermes_env)
 
-    os.environ.setdefault(
-        "PROJECT_LENS_HERMES_REPO",
-        r"C:\Users\Administrator\Desktop\hermes-agent-main",
-    )
+    if not os.environ.get("PROJECT_LENS_HERMES_REPO"):
+        print("FAIL: set PROJECT_LENS_HERMES_REPO to the Hermes agent checkout")
+        return 1
     os.environ.setdefault("PROJECT_LENS_FEISHU_HERMES_PROVIDER", "openai")
-    os.environ.setdefault("PROJECT_LENS_FEISHU_HERMES_MODEL", "gpt-5.4-mini")
+    os.environ.setdefault("PROJECT_LENS_FEISHU_HERMES_MODEL", "gpt-4o-mini")
 
     # Refresh settings after env mutation
     from project_lens import config as config_mod
@@ -63,9 +65,12 @@ def main() -> int:
         return 1
 
     project = ProjectRef(tenant_id="demo", project_id="payment")
-    question = "这个项目是做什么的？请用只读工具查证后再回答。"
-    chat_id = "oc_2a853a543e7e5b004a3a0bf15be52ff8"
-    user_id = "live-hermes-llm-loop"
+    question = os.environ.get(
+        "PROJECT_LENS_LIVE_TEST_QUESTION",
+        "这个项目是做什么的？请用只读工具查证后再回答。",
+    )
+    chat_id = os.environ.get("PROJECT_LENS_FEISHU_TEST_CHAT_ID", "")
+    user_id = os.environ.get("PROJECT_LENS_LIVE_TEST_USER_ID", "live-hermes-llm-loop")
 
     print("question=", question)
     result = asyncio.run(
@@ -106,7 +111,7 @@ def main() -> int:
 
     # Best-effort: post the same card into the bound Feishu chat for human check.
     messenger = getattr(app.state, "feishu_messenger", None)
-    if messenger is not None:
+    if messenger is not None and chat_id:
         from project_lens.integrations.feishu.hermes_tool_loop import render_hermes_tool_loop_card
 
         card = render_hermes_tool_loop_card(result.output_markdown)

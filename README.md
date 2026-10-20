@@ -85,7 +85,15 @@ Invoke-RestMethod http://127.0.0.1:8000/api/v1/ready
 Invoke-RestMethod http://127.0.0.1:8000/api/v1/release-gate
 ```
 
-浏览器入口：`http://127.0.0.1:8000/docs`。默认加载 `config/projects/`，默认数据库为 `project_lens.db`。公网 HTTP 回调部署时监听地址应改为 `0.0.0.0`，并通过反向代理提供 HTTPS；保持单 worker，避免 SQLite、后台调度器或飞书长连接重复启动。
+浏览器入口：`http://127.0.0.1:8000/docs`。默认加载 `config/projects/`，默认数据库为 `project_lens.db`。公网 HTTP 回调部署时监听地址应改为 `0.0.0.0`，并通过反向代理提供 HTTPS；保持单 worker，避免 SQLite、后台调度器或飞书长连接重复启动。当前仓库没有 serverless、Docker 或云平台专用部署配置，推荐先部署在单台 VM/主机上；不要把当前 SQLite + 进程内调度器配置直接扩展为多副本服务。
+
+### 部署边界
+
+- 生产入口应使用单个 Uvicorn 进程，由 systemd、容器编排或同类进程管理器负责重启。
+- 反向代理负责 HTTPS、域名、请求体限制和访问日志；ProjectLens 只监听内网端口。
+- `PROJECT_LENS_DATABASE_PATH`、`PROJECT_LENS_GENAI_TRACE_DIR` 和 `.env` 应放在持久化、权限受控的目录，不要放入仓库或临时目录。
+- 飞书 HTTP 回调和 WebSocket 长连接是两种互斥入口，只启用一种；部署 HTTP 回调时关闭 `PROJECT_LENS_FEISHU_LONG_CONNECTION_ENABLED`。
+- 生产发布前必须通过 `/api/v1/health`、`/api/v1/ready` 和 `/api/v1/release-gate`，并配置 `PROJECT_LENS_SERVICE_TOKEN` 与 MCP 受信任身份。
 
 ## 配置方法
 
@@ -195,8 +203,8 @@ SQLite 保存项目运行状态、会话、记忆、来源索引、审批和事�
 ## 测试与开发
 
 ```powershell
-py -3.12 -m pytest -q
-py -3.12 -m ruff check .
+py -3.12 -m compileall -q src tests
+py -3.12 -m pytest -q tests/test_project_intro.py tests/test_project_agent_ask_api.py tests/test_runtime_security.py tests/test_security_evaluation.py
 ```
 
 按主题运行：
@@ -206,6 +214,8 @@ py -3.12 -m pytest tests/test_project_intro.py tests/test_project_agent_ask_api.
 py -3.12 -m pytest tests/test_runtime_security.py tests/test_security_evaluation.py -q
 py -3.12 -m pytest tests/test_feishu_http_and_acl.py tests/test_feishu_ws_ingress.py -q
 ```
+
+公开仓库的 GitHub Actions 运行同样的编译检查和四组无外部凭据的 smoke tests。完整测试集包含需要额外环境或仍在整理中的历史用例，发布前应在目标环境单独执行并记录结果；Ruff 可用于后续增量清理，当前既有代码仍有 lint 技术债。
 
 修改权限、检索、Agent 工具或外部集成时必须补回归测试。
 

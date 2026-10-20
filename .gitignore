@@ -27,3 +27,14 @@ data/
 架构分析.md
 思考/
 .cursor/
+
+# Local/private project material. Keep competition and operator work out of the public tree.
+config/projects/deepseek-harness.json
+docs/business-plan.md
+docs/projectlens-feishu-cursor-test-handoff.md
+evaluation/reports/
+findings.md
+progress.md
+task_plan.md
+obsidian-vault/
+obsidian-vault-seed/

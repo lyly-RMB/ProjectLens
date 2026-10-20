@@ -12,9 +12,11 @@ python -m pip install -e ".[dev,mcp]"
 运行检查：
 
 ```bash
-python -m ruff check .
-python -m pytest -q
+python -m compileall -q src tests
+python -m pytest -q tests/test_project_intro.py tests/test_project_agent_ask_api.py tests/test_runtime_security.py tests/test_security_evaluation.py
 ```
+
+这组命令与公开仓库的 GitHub Actions smoke CI 一致。完整测试集和全量 Ruff 检查可以在本地继续运行，但当前基线仍有需要单独处理的历史失败与 lint 技术债。
 
 涉及权限、检索、Agent 工具、飞书或外部服务的改动必须补回归测试。不要提交 `.env`、数据库、trace、真实凭据、真实飞书绑定或未脱敏业务资料。
 
